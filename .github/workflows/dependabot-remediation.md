@@ -68,6 +68,11 @@ steps:
       node-version: lts/*
   - name: Mint App token to read alerts and PRs
     id: read-token
+    # Tolerate forks/environments where the aro-hcp-robot App secrets are not
+    # configured (e.g. repos that do not have the DEPENDABOT_APP_CLIENT_ID /
+    # DEPENDABOT_APP_PRIVATE_KEY secrets set): fail this step alone rather than
+    # the whole job. The next step falls back to an empty token in that case.
+    continue-on-error: true
     uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
     with:
       client-id: ${{ secrets.DEPENDABOT_APP_CLIENT_ID }}
@@ -86,6 +91,15 @@ steps:
       set -euo pipefail
       # Keep the scratch files out of git so they never end up in a remediation PR.
       printf '%s\n' dependabot-alerts.json open-pull-requests.json open-pull-requests.base.json >> .git/info/exclude
+      if [ -z "${GH_TOKEN:-}" ]; then
+        # The App token step above was skipped (no aro-hcp-robot App secrets
+        # configured). Nothing can be fetched, so give the agent empty inputs
+        # instead of failing the whole run.
+        echo "No aro-hcp-robot App token available; skipping alert/PR pre-fetch."
+        echo '[]' > dependabot-alerts.json
+        echo '[]' > open-pull-requests.json
+        exit 0
+      fi
       gh api --paginate "/repos/${{ github.repository }}/dependabot/alerts?state=open&per_page=100" \
         --jq '.[] | {number, ecosystem: .dependency.package.ecosystem, package: .dependency.package.name, manifest: .dependency.manifest_path, ghsa: .security_advisory.ghsa_id, cve: .security_advisory.cve_id, severity: .security_advisory.severity, vulnerable_range: .security_vulnerability.vulnerable_version_range, first_patched: .security_vulnerability.first_patched_version.identifier}' \
         | jq -s '.' > dependabot-alerts.json
